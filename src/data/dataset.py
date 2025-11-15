@@ -12,7 +12,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets
 
-from .augmentations import build_eval_transform, build_weak_augmentation
+from .augmentations import build_eval_transform, build_no_aug_transform
 
 
 @dataclass
@@ -104,7 +104,7 @@ class CIFAR100DataModule:
         test_transform=None,
     ) -> None:
         self.cfg = config
-        self.train_transform = train_transform or build_weak_augmentation()
+        self.train_transform = train_transform or build_no_aug_transform()
         self.val_transform = val_transform or build_eval_transform()
         self.test_transform = test_transform or build_eval_transform()
 

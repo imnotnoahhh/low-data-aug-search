@@ -45,7 +45,7 @@
 
 以下示例均使用 `python - <<'PY' ... PY` 的方式在命令行直接执行，也可以把代码保存成脚本再运行。
 
-### 3.1 阶段 A：单增强 Sobol + ASHA
+### 3.1 阶段 A：单增强 Sobol + ASHA（NoAug 基准）
 
 ```bash
 python - <<'PY'
@@ -153,7 +153,7 @@ python - <<'PY'
 from src.eval.report import EvalEntry, ResultsAggregator
 
 agg = ResultsAggregator()
-agg.add(EvalEntry(name="WeakAug", seed=0, split="val", top1=60.1, top5=84.2))
+agg.add(EvalEntry(name="NoAug", seed=0, split="val", top1=48.2, top5=72.5))
 # ... 添加其它条目
 agg.to_csv("artifacts/results_summary.csv")
 PY

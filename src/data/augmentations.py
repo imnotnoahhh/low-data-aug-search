@@ -27,14 +27,8 @@ class TransformSpec:
         return TransformSpec(name=self.name, prob=new_prob, params=new_params)
 
 
-def build_weak_augmentation(normalize: bool = True) -> T.Compose:
-    """WeakAug = RandomCrop(32, padding=4) + RandomHorizontalFlip + ToTensor + Normalize."""
-
-    ops: List[T.transforms] = [
-        T.RandomCrop(IMAGE_SIZE, padding=4),
-        T.RandomHorizontalFlip(),
-    ]
-    ops.append(T.ToTensor())
+def build_no_aug_transform(normalize: bool = True) -> T.Compose:
+    ops: List[T.transforms] = [T.ToTensor()]
     if normalize:
         ops.append(T.Normalize(CIFAR_MEAN, CIFAR_STD))
     return T.Compose(ops)
@@ -110,31 +104,15 @@ def _build_single_transform(spec: TransformSpec) -> T.transforms:
 
 def build_aug_chain(
     specs: Sequence[TransformSpec],
-    include_weak_aug: bool = True,
-    to_tensor_first: bool = False,
 ) -> T.Compose:
-    """根据若干 TransformSpec 与 WeakAug 组合出完整增强."""
+    """根据若干 TransformSpec 组合出完整 pipeline."""
 
     ops: List[T.transforms] = []
-
-    if include_weak_aug:
-        ops.extend(
-            [
-                T.RandomCrop(IMAGE_SIZE, padding=4),
-                T.RandomHorizontalFlip(),
-            ]
-        )
-
     for spec in specs:
         ops.append(_build_single_transform(spec))
 
-    if include_weak_aug and not to_tensor_first:
-        ops.append(T.ToTensor())
-        ops.append(T.Normalize(CIFAR_MEAN, CIFAR_STD))
-    else:
-        # 允许先插入额外操作后再 ToTensor
-        ops.append(T.ToTensor())
-        ops.append(T.Normalize(CIFAR_MEAN, CIFAR_STD))
+    ops.append(T.ToTensor())
+    ops.append(T.Normalize(CIFAR_MEAN, CIFAR_STD))
 
     return T.Compose(ops)
 

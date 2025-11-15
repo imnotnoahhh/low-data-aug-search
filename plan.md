@@ -17,8 +17,8 @@
 
 ## 二、增强空间与合法范围
 
-### （补充）WeakAug 叠加原则
-- 阶段 A/B 的所有增强均在 **WeakAug 基础上叠加**，不替换 WeakAug。
+### （补充）NoAug 基准与增强组合原则
+- 阶段 A/B 默认从 **NoAug** 出发（仅 Resize+Normalize），将待搜索的基础增强串联成 pipeline，不再附加 WeakAug。
 
 每个基础增强定义为 (变换类型, 概率 p, 幅度 m)，并设定合法范围。
 
@@ -39,7 +39,7 @@
 1. **人类先验**：禁止上下翻转，旋转角度 |θ| ≤ 15°。  
 2. **一致性检测（Consistency Check）**  
    - 使用在 **完整 CIFAR-100 训练集（50k）** 上训练的 ResNet-18 Baseline 模型，仅用于一致性评估，不参与增强搜索和最终对比。  
-   - Baseline 训练配置：WeakAug（RandomCrop(4)+RandomHorizontalFlip+Normalize）、SGD(momentum=0.9, weight_decay=5e-4)、CosineAnnealingLR、200 epoch（或与主实验一致的标准设定），可以复用公开实现。  
+   - Baseline 训练配置：NoAug（仅 Resize+Normalize）、SGD(momentum=0.9, weight_decay=5e-4)、CosineAnnealingLR、200 epoch（或与主实验一致的标准设定），可以复用公开实现。  
    - 一致率定义：在固定的一致性评估集（默认使用全部 50,000 张训练图像，或每类 100 张、共 10,000 张子集）上，原图与增强图 argmax 相同的比例。  
    - 阶段 A 约束：一致率 ≥ 0.85，若某组 (p,m) 未通过约束则直接丢弃，不进入训练比较。  
 
@@ -53,7 +53,7 @@
 ### 阶段 A：筛选（Screening）
 
 **目标**：粗粒度探索每个增强在合法幅度范围 m 和概率 p 下的效果，筛选出显著有效的子范围。  
-**Baseline**：WeakAug。
+**Baseline**：NoAug（仅 Resize+Normalize）。
 
 #### 参数空间说明
 
@@ -106,8 +106,8 @@
 
 ### 阶段 C：策略组合（Policy Ensemble）
 
-- **策略定义**：每个策略 Sᵢ 表示在 **WeakAug** 之上叠加的一组额外增强（若干基础变换及其 (p,m)），即 WeakAug 始终作为所有策略的公共底座。  
-- **Mixup 位置**：对所有方法统一采用 WeakAug / Sᵢ 之后、网络输入之前的 Mixup，即我们的方法实际为 `WeakAug + Sᵢ + Mixup`。  
+- **策略定义**：每个策略 Sᵢ 表示在 **NoAug 基准** 上串联的一组基础增强（若干变换及其 (p,m)），即所有策略都从无增强起步，仅由搜索到的增强序列构成。  
+- **Mixup 位置**：默认在 Sᵢ 之后、网络输入之前应用 Mixup，即 `NoAug + Sᵢ (+Mixup)`；可在消融中关闭以验证贡献。  
 - **策略级采样**：训练时每个 batch 等概率从候选集合中采样一条策略 Sᵢ，该 batch 内所有样本使用同一条策略（再接 Mixup）。  
 
 **贪心选择流程**：  
@@ -126,15 +126,15 @@
 
 ## 四、对照与消融
 
-1. NoAug  
-2. WeakAug  
-3. WeakAug + Mixup  
-4. RandAugment(N=2, M=10)  
+1. NoAug（baseline）  
+2. NoAug + Mixup  
+3. RandAugment(N=2, M=10)  
+4. WeakAug（参考对照，用于衡量与常规弱增强的差距）  
 5. 仅调 p / 仅调 m / 同时调 (p,m)（在相同预算下比较搜索效率）  
 6. 跳过阶段 A 全范围搜索（直接在原始合法范围上做联合搜索）  
 7. 去掉语义保真约束：Ours w/o Consistency Constraint（不施加一致率 ≥ 0.85）  
 8. 去掉 Mixup：Ours (no Mixup)，验证增益是否主要来自图像增强策略本身  
-9. 人工强增强：WeakAug + 人工设定的 ColorJitter + RandomErasing（经验型强增强），与自动搜索策略对比  
+9. 人工强增强：NoAug + 人工设定的 ColorJitter + RandomErasing（经验型组合），与自动搜索策略对比  
 
 ---
 
@@ -151,12 +151,12 @@
 ## 六、鲁棒性验证（CIFAR-100-C）
 
 - 在 CIFAR-100 上训练好的最终模型上直接评估，不在 CIFAR-100-C 上做任何额外调参或微调。  
-- 评价对象：WeakAug、WeakAug+Mixup、RandAugment、单策略最优 S₁、最终策略集（Policy Ensemble）等关键方法，默认在同样的 5 个 seeds 下分别计算 mCA 并汇总 mean ± std。  
+- 评价对象：NoAug、NoAug+Mixup、RandAugment、WeakAug（参考）、单策略最优 S₁、最终策略集（Policy Ensemble）等关键方法，默认在同样的 5 个 seeds 下分别计算 mCA 并汇总 mean ± std。  
 - 按 CIFAR-100-C 官方设定，对 15 种 corruption × 5 个 severity 的 top-1 accuracy 取平均：  
   \[
   \text{mCA} = \frac{1}{15 \times 5}\sum_{\text{corruption}, \text{severity}} \text{Acc}
   \]  
-- 报告 mCA（mean ± std），并与 WeakAug / RandAugment / WeakAug+Mixup 对照。
+- 报告 mCA（mean ± std），并与 RandAugment / WeakAug（参考）等方法对照。
 
 ---
 
@@ -171,7 +171,7 @@
 - **环境与版本**：  
   - 固定并在附录中列出 PyTorch、torchvision、CUDA/cuDNN、Python 等关键库版本，以及 GPU 型号（如 NVIDIA A10）。  
 - **验证与测试流程**：  
-  - val/test 仅做 Resize+Normalize，不叠加 WeakAug 或其他训练增强。  
+  - val/test 仅做 Resize+Normalize，不叠加任何训练增强。  
 - **日志与结果文件**：  
   - 统一以 `results_summary.csv` 汇总关键结果（包含 dataset、policy_id、seed、Top-1、Top-5、mCA 等列）；  
   - 阶段 A/B 的 (p,m) 搜索结果与 Top-k 策略以 JSON/CSV 形式公开；  
