@@ -56,6 +56,7 @@ cfg = StageAConfig(
     transform_name="ColorJitter",
     n_samples=32,
     sobol_seed=0,
+    seed=0,
     data=DataModuleConfig(root="data"),
     output_dir="artifacts/stage_a/colorjitter",
 )

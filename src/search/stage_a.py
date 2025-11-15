@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import csv
 import json
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.quasirandom import SobolEngine
@@ -181,6 +183,7 @@ class StageAConfig:
     transform_name: str
     n_samples: int = 32
     sobol_seed: int = 0
+    seed: int = 0
     data: DataModuleConfig = field(default_factory=lambda: DataModuleConfig(root="data"))
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     scheduler: SchedulerConfig = field(
@@ -222,7 +225,8 @@ class StageAScreener:
         self._std = torch.tensor(CIFAR_STD).view(3, 1, 1)
         self._visual_indices = list(range(8))
 
-    def _build_session(self, spec: TransformSpec) -> TrainingSession:
+    def _build_session(self, spec: TransformSpec, seed: int) -> TrainingSession:
+        self._set_seed(seed)
         train_transform = build_aug_chain([spec])
         data_module = CIFAR100DataModule(
             config=self.cfg.data,
@@ -249,6 +253,14 @@ class StageAScreener:
             device=self.device,
         )
 
+    @staticmethod
+    def _set_seed(seed: int) -> None:
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+
     def _asha_loop(self, specs: List[TransformSpec]) -> List[Dict]:
         rung_levels = self.cfg.asha.rung_levels
         reduction = self.cfg.asha.reduction_factor
@@ -259,7 +271,8 @@ class StageAScreener:
             {
                 "id": f"{self.cfg.transform_name}_{idx}",
                 "spec": spec,
-                "session": self._build_session(spec),
+                "seed": self.cfg.seed + idx,
+                "session": self._build_session(spec, self.cfg.seed + idx),
                 "alive": True,
                 "results": {},
             }
