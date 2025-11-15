@@ -4,17 +4,16 @@
 
 ## 1. 环境准备
 
-1. **Python 与虚拟环境**
+1. **Python 与虚拟环境**（使用 Conda）
    ```bash
-   python3.10 -m venv .venv
-   source .venv/bin/activate
+   conda create -n dl python=3.14 -y
+   conda activate dl
    ```
 
 2. **依赖安装**（以 CUDA 12.x 为例，若服务器上已有 PyTorch，可跳过重新安装）
    ```bash
-   pip install --upgrade pip
-   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-   pip install numpy pillow tqdm pandas
+   pip3 install torch torchvision
+   conda install numpy pillow tqdm pandas
    ```
 
 3. **目录结构**
@@ -32,7 +31,7 @@
    - 代码默认将数据放在 `data/` 目录。首次运行时会自动下载，也可以提前手动下载到服务器并解压至相同路径。
 
 2. **CIFAR-100-C**
-   - 官方下载链接：https://zenodo.org/record/2535967
+   - 官方下载链接：https://zenodo.org/records/3555552
    - 下载后，将所有 `.npy` 文件置于 `data/CIFAR-100-C/`，目录结构应为：
      ```
      data/CIFAR-100-C/

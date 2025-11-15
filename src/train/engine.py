@@ -5,8 +5,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
 from .mixup import MixupConfig, mixup_batch, mixup_criterion
@@ -74,7 +73,7 @@ class TrainingSession:
         self.train_cfg = train_cfg
         self.sched_cfg = sched_cfg
         self.device = device
-        self.scaler = GradScaler(enabled=train_cfg.use_amp)
+        self.scaler = GradScaler(device="cuda", enabled=train_cfg.use_amp)
         self.current_epoch = 0
         self.history: List[Dict[str, float]] = []
 

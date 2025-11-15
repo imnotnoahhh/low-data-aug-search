@@ -1,0 +1,23 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+env/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Experiment outputs
+artifacts/
+*.pt
+*.pth
+
+# Data archives
+*.tar
+*.tar.gz
+*.zip
+
+

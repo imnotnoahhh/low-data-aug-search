@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import multiprocessing as mp
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -111,6 +112,14 @@ class CIFAR100DataModule:
         self._train_set = None
         self._val_set = None
         self._test_set = None
+        self._mp_ctx = self._resolve_mp_context()
+
+    @staticmethod
+    def _resolve_mp_context():
+        try:
+            return mp.get_context("fork")
+        except (ValueError, AttributeError):
+            return None
 
     def _build_dataset(self, train: bool, transform) -> datasets.CIFAR100:
         return datasets.CIFAR100(
@@ -139,6 +148,7 @@ class CIFAR100DataModule:
             num_workers=self.cfg.num_workers,
             pin_memory=self.cfg.pin_memory,
             drop_last=self.cfg.drop_last,
+            multiprocessing_context=self._mp_ctx,
         )
 
     def val_dataloader(self) -> DataLoader:
@@ -150,6 +160,7 @@ class CIFAR100DataModule:
             shuffle=False,
             num_workers=self.cfg.num_workers,
             pin_memory=self.cfg.pin_memory,
+            multiprocessing_context=self._mp_ctx,
         )
 
     def test_dataloader(self) -> DataLoader:
@@ -161,5 +172,6 @@ class CIFAR100DataModule:
             shuffle=False,
             num_workers=self.cfg.num_workers,
             pin_memory=self.cfg.pin_memory,
+            multiprocessing_context=self._mp_ctx,
         )
 

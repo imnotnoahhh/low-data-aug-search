@@ -187,7 +187,12 @@ class StageAConfig:
         default_factory=lambda: SchedulerConfig(max_epochs=30, warmup_epochs=5, eta_min=1e-4)
     )
     training: TrainingConfig = field(
-        default_factory=lambda: TrainingConfig(epochs=30, grad_clip=1.0, use_amp=True)
+        default_factory=lambda: TrainingConfig(
+            epochs=30,
+            grad_clip=1.0,
+            use_amp=True,
+            log_interval=20,
+        )
     )
     mixup: MixupConfig = field(default_factory=lambda: MixupConfig(alpha=0.2, enabled=True))
     asha: ASHAConfig = field(
