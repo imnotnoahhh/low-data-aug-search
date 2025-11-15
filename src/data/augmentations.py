@@ -82,11 +82,12 @@ def _build_single_transform(spec: TransformSpec) -> T.transforms:
     elif name == "GaussianNoise":
         sigma = params.get("sigma", 0.05)
 
-        def _add_noise(img: torch.Tensor) -> torch.Tensor:
+        def _add_noise(img):
             if not isinstance(img, torch.Tensor):
-                raise TypeError("GaussianNoise 需在 ToTensor 之后使用")
+                img = T.functional.pil_to_tensor(img).float().div_(255.0)
             noise = torch.randn_like(img) * sigma
-            return torch.clamp(img + noise, 0.0, 1.0)
+            noisy = torch.clamp(img + noise, 0.0, 1.0)
+            return noisy
 
         transform = T.Lambda(_add_noise)
     elif name == "RandomErasing":
