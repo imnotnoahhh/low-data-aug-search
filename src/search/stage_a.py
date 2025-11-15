@@ -191,7 +191,7 @@ class StageAConfig:
             epochs=30,
             grad_clip=1.0,
             use_amp=True,
-            log_interval=20,
+            log_interval=5,
         )
     )
     mixup: MixupConfig = field(default_factory=lambda: MixupConfig(alpha=0.2, enabled=True))
@@ -274,6 +274,11 @@ class StageAScreener:
             for state in active:
                 if not state["alive"]:
                     continue
+                spec: TransformSpec = state["spec"]
+                print(
+                    f"[StageA][{self.cfg.transform_name}] Trial {state['id']} "
+                    f"→ target_epoch {target_epoch}, prob={spec.prob:.2f}, params={spec.params}"
+                )
                 metrics = state["session"].train_until(target_epoch)
                 record = {
                     "trial_id": state["id"],

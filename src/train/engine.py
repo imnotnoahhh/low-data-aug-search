@@ -99,7 +99,7 @@ class TrainingSession:
             targets = targets.to(self.device, non_blocking=True)
             self.optimizer.zero_grad(set_to_none=True)
 
-            with autocast(enabled=self.train_cfg.use_amp):
+            with autocast(device_type="cuda", enabled=self.train_cfg.use_amp):
                 inputs, targets_a, targets_b, lam = mixup_batch(images, targets, self.mixup_cfg)
                 outputs = self.model(inputs)
                 loss = mixup_criterion(self.criterion, outputs, targets_a, targets_b, lam)
@@ -152,7 +152,7 @@ class TrainingSession:
         for images, targets in loader:
             images = images.to(self.device, non_blocking=True)
             targets = targets.to(self.device, non_blocking=True)
-            with autocast(enabled=self.train_cfg.use_amp):
+            with autocast(device_type="cuda", enabled=self.train_cfg.use_amp):
                 outputs = self.model(images)
                 loss = self.criterion(outputs, targets)
             prec1, prec5 = accuracy(outputs, targets, topk=(1, 5))
