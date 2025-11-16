@@ -64,10 +64,16 @@ StageAScreener(cfg).run()
 PY
 ```
 
+> 可选：`visual_indices` 控制可视化使用的样本（默认前 4 张），`visual_strategies=("topk","quantiles")` 会同时输出“最优”和“强度分档”两类对比图，`visual_quantile_bins` 控制分档数量。
+
 输出包括：
 - `*_results.csv`：所有 rung 的指标；
-- `*_topk.json`：最终 Top-4 配置；
-- `*_examples.png`：各候选的原图/增强图示例。
+- `*_topk.json`：最终 Top-4 配置（供阶段 B 使用）；
+- `examples/`：自动保存两类可视化
+  - `topk_rank*_...png`：性能最好的 Top-k trial，可快速人工筛查；
+  - `quantile_rank*_...png`：按增强强度（p 或 m）分成 4 档的代表点，观察“弱/中/强”效果；
+  - 每张图都是固定 4 张样本的 4×2 原图/增强对比，文件名编码了 `p`、`m` 和 `val_top1`，便于引用；
+- `examples_meta.json`：列出每张图的来源 trial、`p`、`params`、`val_top1` 等信息，可直接用于附录表格或复现。
 
 ### 3.2 阶段 B：联合调参
 

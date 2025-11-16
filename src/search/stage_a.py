@@ -5,7 +5,7 @@ import json
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -27,6 +27,36 @@ from src.train.engine import (
 from src.train.mixup import MixupConfig
 from src.search.asha import ASHAConfig
 from src.utils.visualization import save_side_by_side
+def _default_strength_metric(transform_name: str) -> Callable[[TransformSpec], float]:
+    if transform_name in {"GaussianNoise", "GaussianBlur"}:
+        return lambda spec: float(spec.params.get("sigma", 0.0))
+    if transform_name == "RandomRotation":
+        def _rotation_strength(spec: TransformSpec) -> float:
+            degrees = spec.params.get("degrees", 0)
+            if isinstance(degrees, (list, tuple)):
+                return float(max(abs(degrees[0]), abs(degrees[-1])))
+            return float(abs(degrees))
+        return _rotation_strength
+    if transform_name == "RandomResizedCrop":
+        return lambda spec: float(spec.params.get("scale", (0.5, 1.0))[0])
+    if transform_name == "RandomCrop":
+        return lambda spec: float(spec.params.get("padding", 0))
+    if transform_name == "ColorJitter":
+        return lambda spec: float(
+            spec.params.get("brightness", 0)
+            + spec.params.get("contrast", 0)
+            + spec.params.get("saturation", 0)
+            + spec.params.get("hue", 0)
+        )
+    if transform_name == "RandomPerspective":
+        return lambda spec: float(spec.params.get("distortion_scale", 0.0))
+    if transform_name == "RandomGrayscale":
+        return lambda spec: 1.0
+    if transform_name == "RandomHorizontalFlip":
+        return lambda spec: float(spec.prob)
+    if transform_name == "RandomErasing":
+        return lambda spec: float(spec.params.get("scale", (0.0, 0.0))[1])
+    return lambda spec: float(spec.prob)
 
 
 def _map_range(value: float, low: float, high: float) -> float:
@@ -207,6 +237,8 @@ class StageAConfig:
     visual_indices: Sequence[int] = (0, 1, 2, 3)
     visual_dirname: str = "examples"
     visual_meta_filename: str = "examples_meta.json"
+    visual_strategies: Sequence[str] = ("topk", "quantiles")
+    visual_quantile_bins: int = 4
 
 
 class StageAScreener:
@@ -398,30 +430,93 @@ class StageAScreener:
         ]
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(serializable, f, indent=2)
-        self._visualize_topk(topk, visual_dir)
+        self._visualize(topk, visual_dir, final_records)
 
-    def _visualize_topk(self, topk: List[Dict], visual_dir: Path, num_examples: int = 4) -> None:
+    def _visualize(self, topk: List[Dict], visual_dir: Path, final_records: List[Dict], num_examples: int = 4) -> None:
         meta: List[Dict] = []
-        for rank, record in enumerate(topk, start=1):
-            spec: TransformSpec = record["spec"]
-            metrics = record.get("metrics", {})
-            filename = visual_dir / self._build_visual_filename(rank, spec, metrics)
-            self._render_examples(spec, filename, num_examples=num_examples)
-            meta.append(
-                {
-                    "rank": rank,
-                    "trial_id": record["trial_id"],
-                    "file": filename.name,
-                    "prob": spec.prob,
-                    "params": spec.params,
-                    "val_top1": metrics.get("val_top1"),
-                }
+        next_rank = 1
+        if "topk" in self.cfg.visual_strategies:
+            for record in topk:
+                meta.append(
+                    self._render_and_record(
+                        record,
+                        visual_dir,
+                        next_rank,
+                        num_examples=num_examples,
+                        tag="topk",
+                    )
+                )
+                next_rank += 1
+        if "quantiles" in self.cfg.visual_strategies and final_records:
+            meta.extend(
+                self._render_quantile_examples(
+                    final_records,
+                    visual_dir,
+                    start_rank=next_rank,
+                    num_examples=num_examples,
+                )
             )
+        if not meta:
+            return
         meta_path = Path(self.cfg.output_dir) / self.cfg.visual_meta_filename
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
 
-    def _build_visual_filename(self, rank: int, spec: TransformSpec, metrics: Dict) -> str:
+    def _render_and_record(
+        self,
+        record: Dict,
+        visual_dir: Path,
+        rank: int,
+        num_examples: int,
+        tag: str,
+    ) -> Dict:
+            spec: TransformSpec = record["spec"]
+            metrics = record.get("metrics", {})
+        filename = visual_dir / self._build_visual_filename(rank, spec, metrics, tag=tag)
+            self._render_examples(spec, filename, num_examples=num_examples)
+        return {
+            "rank": rank,
+            "tag": tag,
+            "trial_id": record["trial_id"],
+            "file": filename.name,
+            "prob": spec.prob,
+            "params": spec.params,
+            "val_top1": metrics.get("val_top1"),
+        }
+
+    def _render_quantile_examples(
+        self,
+        records: List[Dict],
+        visual_dir: Path,
+        start_rank: int,
+        num_examples: int,
+    ) -> List[Dict]:
+        metric_fn = _default_strength_metric(self.cfg.transform_name)
+        records_sorted = sorted(
+            records,
+            key=lambda r: metric_fn(r["spec"]),
+        )
+        bins = max(1, min(self.cfg.visual_quantile_bins, len(records_sorted)))
+        if len(records_sorted) == 0:
+            return []
+        positions = np.linspace(0, len(records_sorted) - 1, bins)
+        indices = sorted({int(round(pos)) for pos in positions})
+        meta: List[Dict] = []
+        for idx in indices:
+            record = records_sorted[idx]
+            meta.append(
+                self._render_and_record(
+                    record,
+                    visual_dir,
+                    rank=start_rank,
+                    num_examples=num_examples,
+                    tag="quantile",
+                )
+            )
+            start_rank += 1
+        return meta
+
+    def _build_visual_filename(self, rank: int, spec: TransformSpec, metrics: Dict, tag: str) -> str:
         prob_str = f"p{spec.prob:.2f}"
         param_parts = []
         for key, value in spec.params.items():
@@ -433,7 +528,7 @@ class StageAScreener:
         params_str = "__".join(param_parts)
         val = metrics.get("val_top1")
         val_str = f"val{val:.2f}" if val is not None else "valNA"
-        return f"rank{rank}_{prob_str}_{params_str}_{val_str}.png"
+        return f"{tag}_rank{rank}_{prob_str}_{params_str}_{val_str}.png"
 
     def _render_examples(
         self,
