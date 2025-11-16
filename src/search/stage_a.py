@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,7 +14,7 @@ import torch.nn as nn
 from torch.quasirandom import SobolEngine
 from torchvision import datasets, transforms as T
 
-from src.data.augmentations import CIFAR_MEAN, CIFAR_STD, TransformSpec, build_aug_chain
+from src.data.augmentations import CIFAR_MEAN, CIFAR_STD, TransformSpec, build_aug_chain, build_eval_transform
 from src.data.dataset import CIFAR100DataModule, DataModuleConfig
 from src.models.resnet import build_resnet18
 from src.train.engine import (
@@ -239,6 +240,12 @@ class StageAConfig:
     visual_meta_filename: str = "examples_meta.json"
     visual_strategies: Sequence[str] = ("topk", "quantiles")
     visual_quantile_bins: int = 4
+    delta_top1_threshold: float = 1.0
+    bootstrap_num_samples: int = 10000
+    spacing_delta_p: float = 0.15
+    spacing_delta_strength: float = 0.1
+    consistency_threshold: float = 0.85
+    consistency_sample_size: int = 256
 
 
 class StageAScreener:
@@ -259,10 +266,17 @@ class StageAScreener:
         self._mean = torch.tensor(CIFAR_MEAN).view(3, 1, 1)
         self._std = torch.tensor(CIFAR_STD).view(3, 1, 1)
         self._visual_indices = list(self.cfg.visual_indices)
+        self._strength_metric = _default_strength_metric(self.cfg.transform_name)
+        self._baseline_model = None
+        self._baseline_transform = build_eval_transform()
+        self._consistency_indices = list(
+            range(min(self.cfg.consistency_sample_size, len(self._visual_dataset)))
+        )
+        self._baseline_stats = self._compute_baseline_stats()
 
-    def _build_session(self, spec: TransformSpec, seed: int) -> TrainingSession:
+    def _build_session(self, specs: Sequence[TransformSpec], seed: int) -> TrainingSession:
         self._set_seed(seed)
-        train_transform = build_aug_chain([spec])
+        train_transform = build_aug_chain(specs)
         data_module = CIFAR100DataModule(
             config=self.cfg.data,
             train_transform=train_transform,
@@ -288,6 +302,14 @@ class StageAScreener:
             device=self.device,
         )
 
+    def _compute_baseline_stats(self) -> Dict:
+        session = self._build_session([], self.cfg.seed + 10_000)
+        target_epoch = self.cfg.asha.rung_levels[-1]
+        baseline_metrics = session.train_until(target_epoch)
+        session.model.eval()
+        self._baseline_model = session.model
+        return baseline_metrics
+
     @staticmethod
     def _set_seed(seed: int) -> None:
         random.seed(seed)
@@ -307,7 +329,7 @@ class StageAScreener:
                 "id": f"{self.cfg.transform_name}_{idx}",
                 "spec": spec,
                 "seed": self.cfg.seed + idx,
-                "session": self._build_session(spec, self.cfg.seed + idx),
+                "session": self._build_session([spec], self.cfg.seed + idx),
                 "alive": True,
                 "results": {},
             }
@@ -367,6 +389,7 @@ class StageAScreener:
             n_samples=self.cfg.n_samples,
             seed=self.cfg.sobol_seed,
         )
+        specs = self._apply_consistency_filter(specs)
         records = self._asha_loop(specs)
         self._export(records)
         return records
@@ -410,16 +433,12 @@ class StageAScreener:
 
         # 导出最终 Top-4
         final_epoch = self.cfg.asha.rung_levels[-1]
-        final_records = [
-            r
-            for r in records
-            if r["epoch"] == final_epoch
-        ]
+        final_records = [r for r in records if r["epoch"] == final_epoch]
         final_records.sort(
             key=lambda r: r["metrics"].get(self.cfg.asha.metric_key, 0.0),
             reverse=self.cfg.asha.maximize,
         )
-        topk = final_records[:4]
+        topk = self._select_candidates(final_records)
         serializable = [
             {
                 "trial_id": r["trial_id"],
@@ -470,10 +489,10 @@ class StageAScreener:
         num_examples: int,
         tag: str,
     ) -> Dict:
-            spec: TransformSpec = record["spec"]
-            metrics = record.get("metrics", {})
+        spec: TransformSpec = record["spec"]
+        metrics = record.get("metrics", {})
         filename = visual_dir / self._build_visual_filename(rank, spec, metrics, tag=tag)
-            self._render_examples(spec, filename, num_examples=num_examples)
+        self._render_examples(spec, filename, num_examples=num_examples)
         return {
             "rank": rank,
             "tag": tag,
@@ -547,4 +566,132 @@ class StageAScreener:
             originals.append(orig)
             augmented.append(aug)
         save_side_by_side(originals, augmented, str(filepath), nrow=num_examples)
+
+    def _select_candidates(self, records: List[Dict]) -> List[Dict]:
+        baseline_top1 = self._baseline_stats.get("val_top1", 0.0)
+        baseline_batches = np.array(self._baseline_stats.get("val_top1_batches", []))
+        if baseline_batches.size == 0:
+            return records[:4]
+        filtered: List[Dict] = []
+        for record in records:
+            metrics = record["metrics"]
+            batches = metrics.get("val_top1_batches")
+            if not batches:
+                continue
+            batches_arr = np.array(batches)
+            if len(batches_arr) != len(baseline_batches):
+                continue
+            delta = metrics.get("val_top1", 0.0) - baseline_top1
+            if delta < self.cfg.delta_top1_threshold:
+                continue
+            diffs = batches_arr - baseline_batches
+            ci_low, ci_high = _bootstrap_ci(
+                diffs,
+                self.cfg.bootstrap_num_samples,
+            )
+            if ci_low <= 0:
+                continue
+            p_value = _paired_t_test(diffs)
+            metrics["delta_top1"] = delta
+            metrics["ci_low"] = ci_low
+            metrics["ci_high"] = ci_high
+            metrics["p_value"] = p_value
+            filtered.append(record)
+
+        filtered.sort(
+            key=lambda r: r["metrics"].get(self.cfg.asha.metric_key, 0.0),
+            reverse=self.cfg.asha.maximize,
+        )
+        selected: List[Dict] = []
+        for record in filtered:
+            if self._satisfies_spacing(selected, record):
+                selected.append(record)
+            if len(selected) == 4:
+                break
+
+        if not selected:
+            return records[:4]
+        return selected
+
+    def _satisfies_spacing(self, selected: List[Dict], candidate: Dict) -> bool:
+        for chosen in selected:
+            spec_chosen = chosen["spec"]
+            spec_candidate = candidate["spec"]
+            if abs(spec_chosen.prob - spec_candidate.prob) < self.cfg.spacing_delta_p:
+                return False
+            strength_chosen = self._strength_metric(spec_chosen)
+            strength_candidate = self._strength_metric(spec_candidate)
+            if abs(strength_chosen - strength_candidate) < self.cfg.spacing_delta_strength:
+                return False
+        return True
+
+    def _apply_consistency_filter(self, specs: List[TransformSpec]) -> List[TransformSpec]:
+        if self._baseline_model is None:
+            return specs
+        passed: List[TransformSpec] = []
+        for spec in specs:
+            if self._passes_consistency(spec):
+                passed.append(spec)
+            else:
+                print(
+                    f"[StageA][{self.cfg.transform_name}] "
+                    f"skip {spec} due to consistency<{self.cfg.consistency_threshold}"
+                )
+        if not passed:
+            raise RuntimeError("所有候选均未通过一致性约束，检查配置或阈值。")
+        return passed
+
+    def _passes_consistency(self, spec: TransformSpec) -> bool:
+        transform = build_aug_chain([spec])
+        matches = 0
+        total = 0
+        baseline_model = self._baseline_model.to(self.device)
+        baseline_model.eval()
+        for idx in self._consistency_indices:
+            img, _ = self._visual_dataset[idx]
+            orig_tensor = self._baseline_transform(img).unsqueeze(0).to(self.device)
+            with torch.no_grad():
+                base_pred = baseline_model(orig_tensor).argmax(dim=1)
+                aug_tensor = transform(img)
+                if not isinstance(aug_tensor, torch.Tensor):
+                    aug_tensor = self._baseline_transform(aug_tensor)
+                aug_tensor = aug_tensor.unsqueeze(0).to(self.device)
+                aug_pred = baseline_model(aug_tensor).argmax(dim=1)
+            if base_pred.item() == aug_pred.item():
+                matches += 1
+            total += 1
+        if total == 0:
+            return True
+        consistency = matches / total
+        return consistency >= self.cfg.consistency_threshold
+
+
+def _bootstrap_ci(
+    diffs: np.ndarray,
+    num_samples: int,
+    alpha: float = 0.05,
+) -> Tuple[float, float]:
+    rng = np.random.default_rng(0)
+    n = len(diffs)
+    if n == 0:
+        return (0.0, 0.0)
+    indices = rng.integers(0, n, size=(num_samples, n))
+    samples = diffs[indices].mean(axis=1)
+    lower = float(np.quantile(samples, alpha / 2))
+    upper = float(np.quantile(samples, 1 - alpha / 2))
+    return lower, upper
+
+
+def _paired_t_test(diffs: np.ndarray) -> float:
+    n = len(diffs)
+    if n < 2:
+        return 1.0
+    mean_diff = float(np.mean(diffs))
+    std_diff = float(np.std(diffs, ddof=1))
+    if std_diff == 0:
+        return 1.0
+    t_stat = mean_diff / (std_diff / math.sqrt(n))
+    dist = torch.distributions.StudentT(df=n - 1)
+    p = 2 * (1 - dist.cdf(torch.tensor(abs(t_stat))).item())
+    return float(p)
 

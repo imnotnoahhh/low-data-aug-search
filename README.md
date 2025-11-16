@@ -64,6 +64,46 @@ StageAScreener(cfg).run()
 PY
 ```
 
+一次性跑完整个增强列表：
+
+```bash
+python - <<'PY'
+from pathlib import Path
+from src.search.stage_a import StageAConfig, StageAScreener
+from src.data.dataset import DataModuleConfig
+
+transforms = [
+    "RandomResizedCrop",
+    "RandomCrop",
+    "RandomRotation",
+    "RandomPerspective",
+    "RandomHorizontalFlip",
+    "ColorJitter",
+    "RandomGrayscale",
+    "GaussianBlur",
+    "GaussianNoise",
+    "RandomErasing",
+]
+
+for name in transforms:
+    out_dir = Path(f"artifacts/stage_a/{name.lower()}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cfg = StageAConfig(
+        transform_name=name,
+        n_samples=32,
+        sobol_seed=0,
+        seed=0,
+        data=DataModuleConfig(root="data"),
+        output_dir=str(out_dir),
+        visual_indices=(0, 1, 2, 3),
+        visual_strategies=("topk", "quantiles"),
+        visual_quantile_bins=4,
+    )
+    print(f"\n=== Running Stage A for {name} ===")
+    StageAScreener(cfg).run()
+PY
+```
+
 > 可选：`visual_indices` 控制可视化使用的样本（默认前 4 张），`visual_strategies=("topk","quantiles")` 会同时输出“最优”和“强度分档”两类对比图，`visual_quantile_bins` 控制分档数量。
 
 输出包括：

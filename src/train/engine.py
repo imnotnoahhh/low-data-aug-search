@@ -148,6 +148,7 @@ class TrainingSession:
         total_top1 = 0.0
         total_top5 = 0.0
         total_samples = 0
+        batch_top1: List[float] = []
 
         for images, targets in loader:
             images = images.to(self.device, non_blocking=True)
@@ -161,11 +162,13 @@ class TrainingSession:
             total_top1 += prec1 * batch_size
             total_top5 += prec5 * batch_size
             total_samples += batch_size
+            batch_top1.append(prec1)
 
         return {
             "val_loss": total_loss / total_samples,
             "val_top1": total_top1 / total_samples,
             "val_top5": total_top5 / total_samples,
+            "val_top1_batches": batch_top1,
         }
 
     def train_until(self, target_epoch: int) -> Dict[str, float]:
