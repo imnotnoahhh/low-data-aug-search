@@ -691,7 +691,18 @@ def _paired_t_test(diffs: np.ndarray) -> float:
     if std_diff == 0:
         return 1.0
     t_stat = mean_diff / (std_diff / math.sqrt(n))
-    dist = torch.distributions.StudentT(df=n - 1)
-    p = 2 * (1 - dist.cdf(torch.tensor(abs(t_stat))).item())
+    cdf_val = _student_t_cdf(abs(t_stat), n - 1)
+    p = 2 * (1 - cdf_val)
     return float(p)
+
+
+def _student_t_cdf(t_value: float, df: int) -> float:
+    if df <= 0:
+        return 0.5
+    t = abs(t_value)
+    x = df / (df + t * t)
+    ibeta = torch.special.betainc(torch.tensor(df / 2.0), torch.tensor(0.5), torch.tensor(x))
+    ibeta = float(ibeta.item())
+    cdf_pos = 1 - 0.5 * ibeta
+    return cdf_pos
 
