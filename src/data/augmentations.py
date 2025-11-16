@@ -5,6 +5,7 @@ from typing import Any, Dict, Iterable, List, Sequence
 
 import torch
 from torchvision import transforms as T
+from torchvision.transforms import functional as F
 
 
 CIFAR_MEAN = (0.5071, 0.4867, 0.4408)
@@ -84,19 +85,35 @@ def _build_single_transform(spec: TransformSpec) -> T.transforms:
 
         def _add_noise(img):
             if not isinstance(img, torch.Tensor):
-                img = T.functional.pil_to_tensor(img).float().div_(255.0)
+                tensor = F.pil_to_tensor(img).float().div_(255.0)
+            else:
+                tensor = img.clone()
             noise = torch.randn_like(img) * sigma
-            noisy = torch.clamp(img + noise, 0.0, 1.0)
-            return noisy
+            noisy = torch.clamp(tensor + noise, 0.0, 1.0)
+            if isinstance(img, torch.Tensor):
+                return noisy
+            return F.to_pil_image(noisy)
 
         transform = T.Lambda(_add_noise)
     elif name == "RandomErasing":
-        transform = T.RandomErasing(
+        base = T.RandomErasing(
             p=1.0,
             scale=params.get("scale", (0.02, 0.33)),
             ratio=params.get("ratio", (0.3, 3.3)),
             value=params.get("value", "random"),
         )
+
+        def _erase(img):
+            if not isinstance(img, torch.Tensor):
+                tensor = F.pil_to_tensor(img).float().div_(255.0)
+            else:
+                tensor = img.clone()
+            erased = base(tensor)
+            if isinstance(img, torch.Tensor):
+                return erased
+            return F.to_pil_image(erased)
+
+        transform = T.Lambda(_erase)
     else:
         raise ValueError(f"Unsupported transform: {name}")
 

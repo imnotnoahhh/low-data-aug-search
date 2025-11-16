@@ -204,6 +204,7 @@ class StageAConfig:
         )
     )
     output_dir: str = "artifacts/stage_a"
+    visual_indices: Sequence[int] = (0, 1, 2, 3)
 
 
 class StageAScreener:
@@ -223,7 +224,7 @@ class StageAScreener:
         self._to_tensor = T.ToTensor()
         self._mean = torch.tensor(CIFAR_MEAN).view(3, 1, 1)
         self._std = torch.tensor(CIFAR_STD).view(3, 1, 1)
-        self._visual_indices = list(range(8))
+        self._visual_indices = list(self.cfg.visual_indices)
 
     def _build_session(self, spec: TransformSpec, seed: int) -> TrainingSession:
         self._set_seed(seed)
