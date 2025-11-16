@@ -205,6 +205,8 @@ class StageAConfig:
     )
     output_dir: str = "artifacts/stage_a"
     visual_indices: Sequence[int] = (0, 1, 2, 3)
+    visual_dirname: str = "examples"
+    visual_meta_filename: str = "examples_meta.json"
 
 
 class StageAScreener:
@@ -340,6 +342,8 @@ class StageAScreener:
     def _export(self, records: List[Dict]) -> None:
         csv_path = Path(self.cfg.output_dir) / f"{self.cfg.transform_name}_results.csv"
         json_path = Path(self.cfg.output_dir) / f"{self.cfg.transform_name}_topk.json"
+        visual_dir = Path(self.cfg.output_dir) / self.cfg.visual_dirname
+        visual_dir.mkdir(parents=True, exist_ok=True)
 
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
@@ -394,16 +398,42 @@ class StageAScreener:
         ]
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(serializable, f, indent=2)
-        self._visualize_topk(topk)
+        self._visualize_topk(topk, visual_dir)
 
-    def _visualize_topk(self, topk: List[Dict], num_examples: int = 4) -> None:
-        for record in topk:
+    def _visualize_topk(self, topk: List[Dict], visual_dir: Path, num_examples: int = 4) -> None:
+        meta: List[Dict] = []
+        for rank, record in enumerate(topk, start=1):
             spec: TransformSpec = record["spec"]
-            filename = (
-                Path(self.cfg.output_dir)
-                / f"{record['trial_id']}_examples.png"
-            )
+            metrics = record.get("metrics", {})
+            filename = visual_dir / self._build_visual_filename(rank, spec, metrics)
             self._render_examples(spec, filename, num_examples=num_examples)
+            meta.append(
+                {
+                    "rank": rank,
+                    "trial_id": record["trial_id"],
+                    "file": filename.name,
+                    "prob": spec.prob,
+                    "params": spec.params,
+                    "val_top1": metrics.get("val_top1"),
+                }
+            )
+        meta_path = Path(self.cfg.output_dir) / self.cfg.visual_meta_filename
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+
+    def _build_visual_filename(self, rank: int, spec: TransformSpec, metrics: Dict) -> str:
+        prob_str = f"p{spec.prob:.2f}"
+        param_parts = []
+        for key, value in spec.params.items():
+            if isinstance(value, (list, tuple)):
+                val_str = "-".join(f"{v:.2f}" for v in value)
+            else:
+                val_str = f"{float(value):.2f}"
+            param_parts.append(f"{key}_{val_str}")
+        params_str = "__".join(param_parts)
+        val = metrics.get("val_top1")
+        val_str = f"val{val:.2f}" if val is not None else "valNA"
+        return f"rank{rank}_{prob_str}_{params_str}_{val_str}.png"
 
     def _render_examples(
         self,
